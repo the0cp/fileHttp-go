@@ -56,6 +56,10 @@ Example:
      curl -X POST -F "filename=test.json" --data-binary @test.json http://localhost:8080/upload
      ```
 
+2. **File Serving**
+   - Access uploaded files through the root endpoint /.
+   - Example: http://localhost:8080/<filename>.json
+
 ### Configuration Options
 
 - **Upload Directory**: Specify where uploaded files are stored using the `-dir` flag.
