@@ -15,6 +15,8 @@ const maxUploadSize = 5 << 20 // 5 MB
 
 var uploadDir string
 
+var semaphore = make(chan struct{}, 1000)
+
 func main() {
 	dir := flag.String("dir", ".", "Directory to save uploaded files")
 	port := flag.String("port", "8080", "Port to listen on")
@@ -47,6 +49,18 @@ func main() {
 }
 
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
+	semaphore <- struct{}{}
+	defer func() {
+		<-semaphore
+		log.Printf("Semaphore released, current capacity: %d", cap(semaphore)-len(semaphore))
+	}()
+
+	if r.ContentLength > maxUploadSize {
+		http.Error(w, fmt.Sprintf("File size exceeds limit of %d bytes", maxUploadSize), http.StatusBadRequest)
+		log.Printf("Upload request exceeds maximum size of %d bytes", maxUploadSize)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 		return
@@ -62,7 +76,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	baseFilename := filepath.Base(filename)
-	if baseFilename == "" || baseFilename == "." || baseFilename == ".." {
+	if baseFilename == "" || baseFilename == "." || baseFilename == ".." || strings.Contains(baseFilename, "..") || filepath.IsAbs(baseFilename) {
 		http.Error(w, "Invalid filename", http.StatusBadRequest)
 		log.Printf("Received invalid filename: %s", filename)
 		return
@@ -82,6 +96,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tempFilePath := tempFile.Name()
+	defer cleanupTempFiles(tempFile, tempFilePath)
 
 	log.Printf("Starting copy to temporary file: %s", tempFilePath)
 	n, err := io.Copy(tempFile, r.Body)
@@ -93,8 +108,6 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("Copied %d bytes to temporary file: %s", n, tempFilePath)
-
-	tempFile.Close()
 
 	go saveFile(tempFilePath, baseFilename, uploadDir)
 
@@ -136,4 +149,14 @@ func saveFile(tempFilePath string, finalFilename string, destDir string) {
 	}
 
 	log.Printf("Background save successful: File '%s' saved to '%s'", finalFilename, dstPath)
+}
+
+func cleanupTempFiles(tempFile *os.File, tempFilePath string) {
+	tempFile.Close()
+	err := os.Remove(tempFilePath)
+	if err != nil {
+		log.Printf("Failed to remove temporary file %s: %v", tempFilePath, err)
+	} else {
+		log.Printf("Temporary file %s removed successfully", tempFilePath)
+	}
 }
