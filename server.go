@@ -20,6 +20,7 @@ var semaphore = make(chan struct{}, 1000)
 func main() {
 	dir := flag.String("dir", ".", "Directory to save uploaded files")
 	port := flag.String("port", "8080", "Port to listen on")
+	caPath := flag.String("ca", "ca.crt", "CA Certificate Path")
 	flag.Parse()
 
 	uploadDir = *dir
@@ -36,14 +37,22 @@ func main() {
 
 	fileServer := http.FileServer(http.Dir(uploadDir))
 	http.Handle("/", fileServer)
-	http.HandleFunc("/upload", uploadHandler)
+	http.Handle("/upload", mTLSAuthMidware(uploadHandler))
+
+	tlsConfig, err := loadTLSConfig(*caPath)
+	if err != nil {
+		log.Fatalf("TLS config error: %v", err)
+	}
+
+	server := &http.Server{
+		Addr:      ":" + *port,
+		TLSConfig: tlsConfig,
+	}
 
 	log.Printf("Server starting on port %s...", *port)
-	log.Printf("Listening for POST /upload (JSON files via query parameter)")
 	log.Printf("Files will be saved in %s", uploadDir)
 
-	err := http.ListenAndServe(":"+*port, nil)
-	if err != nil {
+	if err := server.ListenAndServeTLS("server.crt", "server.key"); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }
