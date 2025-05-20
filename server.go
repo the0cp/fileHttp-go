@@ -20,7 +20,11 @@ var semaphore = make(chan struct{}, 1000)
 func main() {
 	dir := flag.String("dir", ".", "Directory to save uploaded files")
 	port := flag.String("port", "8080", "Port to listen on")
-	caPath := flag.String("ca", "ca.crt", "CA Certificate Path")
+
+	caPath := flag.String("ca", "certs/ca.crt", "CA Certificate Path")
+	certPath := flag.String("cert", "certs/server.crt", "server cert filename")
+	keyPath := flag.String("key", "certs/server.key", "server key filename")
+
 	flag.Parse()
 
 	uploadDir = *dir
@@ -39,7 +43,7 @@ func main() {
 	http.Handle("/", fileServer)
 	http.Handle("/upload", mTLSAuthMidware(uploadHandler))
 
-	tlsConfig, err := loadTLSConfig(*caPath)
+	tlsConfig, err := loadTLSConfig(*caPath, *certPath, *keyPath)
 	if err != nil {
 		log.Fatalf("TLS config error: %v", err)
 	}
@@ -52,7 +56,7 @@ func main() {
 	log.Printf("Server starting on port %s...", *port)
 	log.Printf("Files will be saved in %s", uploadDir)
 
-	if err := server.ListenAndServeTLS("server.crt", "server.key"); err != nil {
+	if err := server.ListenAndServeTLS(*certPath, *keyPath); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }
@@ -105,7 +109,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tempFilePath := tempFile.Name()
-	defer cleanupTempFiles(tempFile, tempFilePath)
+	// defer cleanupTempFiles(tempFile, tempFilePath)
 
 	log.Printf("Starting copy to temporary file: %s", tempFilePath)
 	n, err := io.Copy(tempFile, r.Body)
@@ -116,6 +120,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to copy request body to temporary file %s: %v", tempFilePath, err)
 		return
 	}
+	tempFile.Close()
 	log.Printf("Copied %d bytes to temporary file: %s", n, tempFilePath)
 
 	go saveFile(tempFilePath, baseFilename, uploadDir)
@@ -125,14 +130,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func saveFile(tempFilePath string, finalFilename string, destDir string) {
-	defer func() {
-		err := os.Remove(tempFilePath)
-		if err != nil {
-			log.Printf("Background cleanup error: Failed to remove temporary file %s: %v", tempFilePath, err)
-		} else {
-			log.Printf("Background cleanup successful: Removed temporary file %s", tempFilePath)
-		}
-	}()
+	defer cleanupTempFiles(nil, tempFilePath)
 	log.Printf("Background save started: From temporary file %s to %s/%s", tempFilePath, destDir, finalFilename)
 
 	tempFile, err := os.Open(tempFilePath)
@@ -161,7 +159,7 @@ func saveFile(tempFilePath string, finalFilename string, destDir string) {
 }
 
 func cleanupTempFiles(tempFile *os.File, tempFilePath string) {
-	tempFile.Close()
+	// tempFile.Close()
 	err := os.Remove(tempFilePath)
 	if err != nil {
 		log.Printf("Failed to remove temporary file %s: %v", tempFilePath, err)
